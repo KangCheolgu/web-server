@@ -1,5 +1,16 @@
+#include <stdio.h>
+#include "csapp.h"
 
-//--------------hash 전방 수류탄-----------------------------
+#define INITIAL_HASHMAP_SIZE 10
+
+typedef struct {
+	char *url;        // URi
+	char *data;       // data
+	size_t size;      // data size
+	time_t last_access;
+} cache_entry;
+
+//--------------hash-----------------------------
 //hashmap
 typedef struct {
 	cache_entry **table; // hash table

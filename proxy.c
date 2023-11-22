@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "csapp.h"
 #include "hash.h"
 
 /* Recommended max cache and object sizes */
@@ -16,11 +17,11 @@ int parse_uri(char *uri, char *host, char *port, char *path);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 void *thread(void *vargp);
 
-int main() {
-	int listenfd, connfd;
+int main(int argc, char **argv) {
+	int listenfd, *connfdp;
 	char hostname[MAXLINE], port[MAXLINE];
-	socklen_t clienlen;
-	struct sockaar_storage clientaddr;
+	socklen_t clientlen;
+	struct sockaddr_storage clientaddr;
 	//스레드 식별자
 	pthread_t tid;
 
@@ -61,58 +62,65 @@ void *thread(void *vargp){ //p.954 12.14
 	return NULL;
 }
 
-
 void proxy(int fd){
-    int target_serverfd; // 서버와의 연결을 위한 파일 디스크립터
-	ssize_t n; // 읽은 바이트 수
-	struct stat sbuf; // 파일 정보를 저장하는 구조체
+	int target_serverfd; 
+	struct stat sbuf;
 	char buf[MAXLINE];
 	char buf_res[MAXLINE];
 	char version[MAXLINE];
-
 	//URI parse value
-    char method[MAXLINE], uri[MAXLINE], host[MAXLINE], path[MAXLINE], port[MAXLINE];
-    char filename[MAXLINE], cgiargs[MAXLINE];
-	// 받은 구조체 응답 구조체
-    rio_t rio_res, rio_req;
+	char method[MAXLINE], uri[MAXLINE], host[MAXLINE], path[MAXLINE], port[MAXLINE];
+	char filename[MAXLINE], cgiargs[MAXLINE];
+	rio_t rio;
 
-	// 클라이언트로부터 요청을 받고 초기화 하고 읽고 할당한다.
-	Rio_readinitb(&rio_req, fd);
-	Rio_readlineb(&rio_req, buf, MAXLINE);
 
+
+	Rio_readinitb(&rio, fd);
+	Rio_readlineb(&rio, buf, MAXLINE);
 	printf("Request headers:\n");
 	printf("%s", buf);
 	sscanf(buf, "%s %s %s", method, uri, version);
-	// parsing을 잘했는지 확인
+
 	parse_uri(uri, host, port, path);
 	printf("-----------------------------\n");	
 	printf("\nClient Request Info : \n");
-	printf("method : %s\n", method);
+	printf("mothed : %s\n", method);
 	printf("URI : %s\n", uri);
 	printf("hostName : %s\n", host);
 	printf("port : %s\n", port);
 	printf("path : %s\n", path);
 	printf("-----------------------------\n");
+
+	cache_entry *cached_content = hashmap_search(&cache_map, uri);
 	
-	target_serverfd = Open_clientfd(host, port);
+	if(cached_content != NULL){ //cache hit!
+		cached_content->last_access = time(NULL);
+		//set Header 
+		sprintf(buf_res, "HTTP/1.0 200 OK\r\n");
+		sprintf(buf_res, "%sServer: Tiny Web Server\r\n", buf_res);
+		sprintf(buf_res, "%sConnection: close\r\n", buf_res);
+		sprintf(buf_res, "%sContent-length: %d\r\n\r\n", buf_res, cached_content->size);
+		Rio_writen(fd, buf_res, strlen(buf_res));
 
-	request(target_serverfd, host, path);
-	response(target_serverfd,fd);
-
-	Close(target_serverfd);
+		Rio_writen(fd, cached_content->data, cached_content->size);
+	} else { //cache miss...
+		target_serverfd = Open_clientfd(host, port);
+		request(target_serverfd, host, path);
+		response(target_serverfd, fd, uri);
+		Close(target_serverfd);
+	}
 }
 
 void request(int target_fd,char *host,char *path){
 
 	char *version = "HTTP/1.0";
 	char buf[MAXLINE];
-
 	sprintf(buf, "GET %s %s\r\n", path, version);
 	sprintf(buf, "%sHost: %s\r\n", buf, host);
 	sprintf(buf, "%s%s", buf, user_agent_hdr);
 	sprintf(buf, "%sConnections: close\r\n", buf);
 	sprintf(buf, "%sProxy-Connection: close\r\n\r\n", buf);
-
+	printf("%s",buf);
 	Rio_writen(target_fd, buf, (size_t)strlen(buf));
 }
 
@@ -152,12 +160,16 @@ void response(int target_fd, int fd, char* uri){
 	}
 	
 	//사이즈 작으면 캐시해줌
+	// 서버응답 헤더에서 Content-Length를 통해 얻은 응답 본문의 크기입니다.
+	// MAX_OBJECT_SIZE: 정의된 최대 객체 크기입니다. 이 값보다 작은 응답 본문 크기인 경우에만 캐시에 저장됩니다.
 	if(content_length <= MAX_OBJECT_SIZE){
-		// 서버응답 헤더에서 Content-Length를 통해 얻은 응답 본문의 크기입니다.
+		// new_entry: cache_entry 구조체를 나타내는 포인터입니다. cache_entry는 캐시에 저장할 각 엔트리를 나타냅니다	
 		cache_entry *new_entry = malloc(sizeof(cache_entry));
 		new_entry->url = strdup(uri);
+		// cached_data: Rio_readnb를 통해 읽은 응답 데이터가 저장된 메모리 블록을 가리키는 포인터입니다.
 		new_entry->data = cached_data;
 		new_entry->size = content_length + total_size;
+		// hashmap_insert(&cache_map, new_entry): new_entry를 캐시 맵에 삽입합니다. 이 삽입은 해당 URL에 대한 응답 데이터를 캐시에 저장하는 작업입니다.
 		hashmap_insert(&cache_map, new_entry);	
 	}
 }
